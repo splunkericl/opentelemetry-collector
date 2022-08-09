@@ -35,12 +35,14 @@ import (
 	selector "go.opentelemetry.io/otel/sdk/metric/selector/simple"
 	"go.uber.org/zap"
 
+	semconv "go.opentelemetry.io/collector/semconv/v1.5.0"
+
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/configtelemetry"
 	"go.opentelemetry.io/collector/internal/obsreportconfig"
 	"go.opentelemetry.io/collector/processor/batchprocessor"
-	semconv "go.opentelemetry.io/collector/semconv/v1.5.0"
 	"go.opentelemetry.io/collector/service/featuregate"
+	internalTelemetry "go.opentelemetry.io/collector/service/internal/telemetry"
 	"go.opentelemetry.io/collector/service/telemetry"
 )
 
@@ -174,12 +176,8 @@ func (tel *telemetryInitializer) initOpenCensus(cfg telemetry.Config, telAttrs m
 	}
 
 	// Until we can use a generic metrics exporter, default to Prometheus.
-	namespace := defaultNameSpace
-	if cfg.Metrics.Namespace != nil {
-		namespace = *cfg.Metrics.Namespace
-	}
 	opts := prometheus.Options{
-		Namespace: namespace,
+		Namespace: internalTelemetry.OpenCensusMetricNamespace,
 	}
 
 	opts.ConstLabels = make(map[string]string)

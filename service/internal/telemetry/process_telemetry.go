@@ -25,6 +25,8 @@ import (
 	"go.opencensus.io/stats"
 )
 
+var OpenCensusMetricNamespace = "otelcol"
+
 // processMetrics is a struct that contains views related to process metrics (cpu, mem, etc)
 type processMetrics struct {
 	startTimeUnixNano int64
