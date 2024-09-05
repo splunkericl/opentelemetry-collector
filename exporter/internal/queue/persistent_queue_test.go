@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -529,6 +531,82 @@ func TestPersistentQueueStartWithNonDispatched(t *testing.T) {
 	// Reload with extra capacity to make sure we re-enqueue in-progress items.
 	newPs := createTestPersistentQueueWithRequestsCapacity(t, ext, 6)
 	require.Equal(t, 6, newPs.Size())
+}
+
+func TestPersistentQueueStartWithNonDispatchedConcurrent(t *testing.T) {
+	req := newTracesRequest(1, 1)
+	cfg := filestorage.NewFactory().CreateDefaultConfig().(*filestorage.Config)
+	cfg.Directory = "/tmp/"
+	ext, err := filestorage.NewFactory().CreateExtension(context.Background(), extensiontest.NewNopSettings(), cfg)
+	require.NoError(t, err)
+	ps := NewPersistentQueue[tracesRequest](PersistentQueueSettings[tracesRequest]{
+		Sizer:            &ItemsSizer[tracesRequest]{},
+		Capacity:         5,
+		DataType:         component.DataTypeTraces,
+		StorageID:        component.ID{},
+		Marshaler:        marshalTracesRequest,
+		Unmarshaler:      unmarshalTracesRequest,
+		ExporterSettings: exportertest.NewNopSettings(),
+	}).(*persistentQueue[tracesRequest])
+	require.NoError(t, ps.Start(context.Background(), &mockHost{ext: map[component.ID]component.Component{{}: ext}}))
+
+	proWg := sync.WaitGroup{}
+	for j := 0; j < 5; j++ {
+		proWg.Add(1)
+		go func() {
+			defer proWg.Done()
+			// Put in items up to capacity
+			for i := 0; i < 10; i++ {
+				retries := 0
+				for {
+					if err = ps.Offer(context.Background(), req); err == nil {
+						break
+					}
+					fmt.Println("pro has error", err.Error(), retries)
+					time.Sleep(time.Millisecond * 10)
+					retries++
+				}
+			}
+		}()
+	}
+
+	conWg := sync.WaitGroup{}
+	for j := 0; j < 5; j++ {
+		conWg.Add(1)
+		go func() {
+			defer conWg.Done()
+			for i := 0; i < 10; i++ {
+				require.True(t, ps.Consume(func(context.Context, tracesRequest) error { return nil }))
+			}
+		}()
+	}
+
+	conDone := make(chan struct{})
+	go func() {
+		defer close(conDone)
+		conWg.Wait()
+	}()
+
+	proDone := make(chan struct{})
+	go func() {
+		defer close(proDone)
+		proWg.Wait()
+	}()
+
+	timer := time.After(30 * time.Second)
+	select {
+	case <-conDone:
+		fmt.Println("con done")
+	case <-timer:
+		fmt.Println("con timeout")
+	}
+
+	select {
+	case <-proDone:
+		fmt.Println("pro done")
+	case <-timer:
+		fmt.Println("pro timeout")
+	}
 }
 
 func TestPersistentQueue_PutCloseReadClose(t *testing.T) {
